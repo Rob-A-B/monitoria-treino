@@ -6,7 +6,7 @@ from constants import *
 
 # Variáveis de controle de congestionamento
 cwnd = 1  # Congestion window inicial
-ssthresh = 8  # Limite inicial para Slow Start
+ssthresh = 16  # Limite inicial para Slow Start
 
 def receive_timeout(conn, size):
     conn.setblocking(0)
@@ -28,8 +28,6 @@ def receive(client, current_sequence):
         if msg_length:
             msg_length = int(msg_length.strip())
             msg = receive_timeout(client, msg_length)
-            if msg.startswith(f"{SYNC}-"):
-                return int(msg.split(f"{SYNC}-", 1)[-1])  # Retorna o ID do cliente na sincronização
             print(f"RECEIVED RESPONSE FROM SERVER {msg}")
             return msg_id  # Retorna o ID da mensagem para ACKs normais
 
@@ -40,40 +38,32 @@ def receive(client, current_sequence):
         print(f"[ERROR] Value error: {e}")
         return None
 
-
-    if msg_id != current_sequence:
-        print(f"Ignoring ACK for message with sequence {msg_id}. We probably already retransmitted and received an ack for this message")
-        msg_length = int(msg_length.strip())
-        receive_timeout(client, msg_length)
-        return receive(client, current_sequence)
-
-    if msg_length:
-        msg_length = int(msg_length.strip())
-        msg = receive_timeout(client, msg_length)
-        if msg.startswith(f"{SYNC}-"):
-            return int(msg.split(f"{SYNC}-", 1)[-1])
-        print(f"RECEIVED RESPONSE FROM SERVER {msg}")
-
-def send(client, msg, identifier, insert_error, insert_error_hash, retransmit_attempts=3):
+def send(client, msg, identifier, insert_error=False, insert_error_hash=False, simulate_timeout=False, retransmit_attempts=3):
     try:
         content = str(msg).encode(FORMAT)
 
         if insert_error_hash:
-            content += b'0000'
+            content += b'0000'  # Adiciona um erro intencional no hash
         else:
             content = add_hash(content)
 
-        checksum = (len(content) + identifier) * (1 if insert_error else -1)
+        # Simula erro de checksum, se necessário
+        checksum = (len(content) + identifier) * (1 if not insert_error else -1)
         header = '\n'.join([str(len(content)), str(identifier), str(checksum)]).encode(FORMAT)
         header += b' ' * (HEADER - len(header))
         message = (header + content)
+
+        if simulate_timeout:
+            print(f"[SIMULATION] Timeout simulated for sequence {identifier}")
+            return  # Simula um timeout ao não enviar a mensagem
+
         client.send(message)
     except BrokenPipeError:
-        print("[ERROR] conexão quebrada")
+        print("[ERROR] Conexão quebrada")
     except Exception as e:
         print(f"[ERROR] Unexpected error: {str(e)}")
-        if retransmit_attempts:
-            return send(client, msg, identifier, insert_error, insert_error_hash, retransmit_attempts=retransmit_attempts-1)
+        if retransmit_attempts > 0:
+            return send(client, msg, identifier, insert_error, insert_error_hash, simulate_timeout, retransmit_attempts=retransmit_attempts-1)
 
 def send_window_tahoe(client, messages, start_sequence):
     global cwnd, ssthresh
@@ -85,12 +75,22 @@ def send_window_tahoe(client, messages, start_sequence):
         window = messages[idx:end_idx]
 
         print(f"Enviando janela: {window}")  # Imprime a janela atual
-        for i in range(len(window)):
-            send(client, window[i], start_sequence + i, False, False)
+        for i, message in enumerate(window):
+            error_type = input(f"Especifique o tipo de erro para a mensagem '{message}' (echeck/ehash/etimeout/none): ").strip().lower()
+
+            insert_error = (error_type == 'echeck')
+            insert_error_hash = (error_type == 'ehash')
+            simulate_timeout = (error_type == 'etimeout')
+
+            send(client, message, start_sequence + i, insert_error, insert_error_hash, simulate_timeout)
 
         # Aguarda ACKs e ajusta cwnd de acordo
         acks_received = 0
         for i in range(len(window)):
+            if simulate_timeout:
+                print("[INFO] Timeout foi simulado, não aguardando ACK")
+                break
+
             try:
                 ack_id = receive(client, start_sequence + i)
                 print(f"ACK received for sequence {ack_id}")
