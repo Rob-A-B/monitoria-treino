@@ -6,7 +6,7 @@ from constants import *
 
 # Variáveis de controle de congestionamento
 cwnd = 1  # Congestion window inicial
-ssthresh = 16  # Limite inicial para Slow Start
+ssthresh = 8  # Limite inicial para Slow Start
 
 def receive_timeout(conn, size):
     conn.setblocking(0)
@@ -80,39 +80,39 @@ def send_window_tahoe(client, messages, start_sequence):
     idx = 0  # Índice do início da janela
 
     while idx < len(messages):
-        # Determina quantos pacotes podem ser enviados com base no valor de cwnd
-        end_idx = idx + int(cwnd)  # Limita o tamanho da janela de envio
+        # Limita o tamanho da janela de envio com base em cwnd
+        end_idx = idx + int(cwnd)
         window = messages[idx:end_idx]
 
         print(f"Enviando janela: {window}")  # Imprime a janela atual
-        for message in window:
-            send(client, message, start_sequence, False, False)
-            start_sequence += 1
+        for i in range(len(window)):
+            send(client, window[i], start_sequence + i, False, False)
 
         # Aguarda ACKs e ajusta cwnd de acordo
         acks_received = 0
-        for _ in range(len(window)):
+        for i in range(len(window)):
             try:
-                ack_id = receive(client, start_sequence - len(window) + acks_received)
+                ack_id = receive(client, start_sequence + i)
                 print(f"ACK received for sequence {ack_id}")
                 acks_received += 1
-
             except RecvTimeout:
-                print("Timeout detected, entering Slow Start")
+                print("Timeout detected, entrando em Slow Start")
                 ssthresh = max(cwnd // 2, 1)
                 cwnd = 1  # Reinicia a janela de congestionamento
-                start_sequence -= len(window) - acks_received  # Reajusta a sequência
-                idx -= len(window) - acks_received  # Reajusta o índice para retransmissão
+                start_sequence -= (len(window) - acks_received)  # Reajusta a sequência
+                idx -= (len(window) - acks_received)  # Reajusta o índice para retransmissão
                 break
 
-        # Ajuste de cwnd após receber ACKs
+        # Ajusta cwnd após receber ACKs
         if acks_received == len(window):
             if cwnd < ssthresh:
                 cwnd *= 2  # Crescimento exponencial em Slow Start
             else:
                 cwnd += 1  # Crescimento linear em Congestion Avoidance
 
-        idx += acks_received  # Move o índice pelo número de pacotes confirmados
+        # Move o índice pelo número de pacotes confirmados
+        idx += acks_received
+        start_sequence += acks_received  # Atualiza a sequência de início
 
 if __name__ == '__main__':
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
